@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=Zen+Maru+Gothic:wght@500;700&family=IBM+Plex+Mono:wght@500&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
 <style>
 /* レイアウト：方眼ノートの上で、上に進行表示、中央に会話、下に入力欄が固定された1画面アプリ */
 :root {
@@ -239,6 +240,46 @@ footer {
 }
 .send:disabled { opacity: 0.45; cursor: default; }
 .hint { font-size: 0.75rem; color: var(--ink-soft); margin: 0; }
+/* 最初の名前入力 */
+.modal-bg {
+  position: fixed; inset: 0; z-index: 10;
+  background: color-mix(in srgb, var(--board) 55%, transparent);
+  display: grid; place-items: center;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.modal {
+  width: min(440px, 100%);
+  background: var(--surface); color: var(--ink);
+  border-radius: 16px; border: 1px solid var(--line);
+  padding: 22px 22px 18px;
+  display: grid; gap: 14px;
+}
+.modal h2 { margin: 0; font-family: var(--font-display); font-size: 1.15rem; }
+.modal p { margin: 0; font-size: 0.85rem; color: var(--ink-soft); }
+.modal .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.modal label { display: grid; gap: 4px; font-size: 0.85rem; font-weight: 700; }
+.modal input {
+  font: inherit; font-weight: 400; color: var(--ink); background: var(--paper);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; width: 100%;
+}
+.modal .err { color: var(--danger); font-size: 0.85rem; margin: 0; }
+.modal .send { width: 100%; }
+.who { font-size: 0.8rem; opacity: 0.9; }
+
+/* レポートの下書き */
+.report-card {
+  margin: 8px 0;
+  border: 1px dashed var(--accent);
+  background: var(--accent-soft);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: grid; gap: 8px;
+}
+.report-card .title { font-family: var(--font-display); font-weight: 700; }
+.report-card .send { justify-self: start; height: 40px; }
+.report-card p { margin: 0; font-size: 0.85rem; color: var(--ink-soft); }
+
 .code-gate { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 0.9rem; }
 .code-gate input { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); width: 10em; }
 .code-gate button { font: inherit; padding: 6px 14px; border-radius: 8px; border: none; background: var(--board); color: var(--board-ink); cursor: pointer; }
@@ -251,6 +292,7 @@ footer {
       <h1>誤差考察ラボ</h1>
       <span class="sub">実験A 自由落下 × AIくん</span>
       <div class="head-actions">
+        <button class="ghost who" id="who" type="button" title="名前を直す"></button>
         <button class="ghost" id="save-log" type="button">会話を保存</button>
         <button class="ghost" id="reset" type="button">最初からやり直す</button>
       </div>
@@ -262,7 +304,7 @@ footer {
       <li>④ 主要因</li>
       <li>⑤ 他の要因</li>
       <li>⑥ まとめ表</li>
-      <li>⑦ レポートへ</li>
+      <li>⑦ レポート</li>
     </ol>
   </header>
 
@@ -291,11 +333,34 @@ footer {
   </footer>
 </div>
 
+<div class="modal-bg" id="profile-modal" hidden>
+  <form class="modal" id="profile-form" role="dialog" aria-modal="true" aria-labelledby="profile-title">
+    <h2 id="profile-title">はじめに、きみのことを教えてね</h2>
+    <div class="row">
+      <label for="p-cluster">クラスター（アルファベット）
+        <input id="p-cluster" maxlength="2" autocomplete="off" autocapitalize="characters" placeholder="例 B" required>
+      </label>
+      <label for="p-number">番号
+        <input id="p-number" type="number" inputmode="numeric" min="1" max="99" placeholder="例 12" required>
+      </label>
+    </div>
+    <label for="p-name">名前
+      <input id="p-name" maxlength="30" autocomplete="name" placeholder="例 物理 太郎" required>
+    </label>
+    <label for="p-code">クラスコード（先生から聞いたもの）
+      <input id="p-code" autocomplete="off" autocapitalize="off">
+    </label>
+    <p>入力した名前とAIくんとのやりとりは、先生が学習の様子を確かめるために読みます。レポートにも名前が入ります。</p>
+    <p class="err" id="p-err" hidden></p>
+    <button class="send" type="submit">はじめる</button>
+  </form>
+</div>
+
 <script>
 // ===== 設定 =====
 // デプロイした Cloudflare Worker の URL に書き換える
 const WORKER_URL = "https://gosa-chat.fujinaka-phys.workers.dev/chat";
-const STORAGE_KEY = "gosa-chat-v1";
+const STORAGE_KEY = "gosa-chat-v2";
 const MAX_IMAGE_SIDE = 1568;
 
 const GREETING =
@@ -306,7 +371,7 @@ const GREETING =
 // ===== 状態 =====
 // apiMessages: Claude API に送る会話そのもの（AIくんの返信は thinking ブロックも含めて丸ごと保存し、そのまま送り返す）
 // view: 画面に表示する会話
-let state = { apiMessages: [], view: [], step: 1, classCode: "" };
+let state = { apiMessages: [], view: [], step: 1, classCode: "", student: null, sessionId: "", report: "" };
 let pendingImage = null; // { dataUrl, mediaType, base64 }
 let busy = false;
 
@@ -333,8 +398,15 @@ function save() {
 
 // ===== 表示 =====
 const STEP_RE = /\[\[STEP:(\d)\]\]/g;
+const REPORT_RE = /```report\s*\n([\s\S]*?)```/;
+const REPORT_MARK = "\n\n%%REPORT%%\n\n";
 function stripControl(text) {
-  return text.replace(STEP_RE, "").replace(/\[\[[^\]]*$/, "").trimEnd();
+  return text
+    .replace(STEP_RE, "")
+    .replace(REPORT_RE, REPORT_MARK)
+    .replace(/```report[\s\S]*$/, "\n\n（レポートの下書きを作っています…）")
+    .replace(/\[\[[^\]]*$/, "")
+    .trimEnd();
 }
 function renderMarkdown(text) {
   const html = DOMPurify.sanitize(marked.parse(text, { breaks: true }));
@@ -374,13 +446,40 @@ function bubble(role, { text = "", image = null, error = false } = {}) {
   }
   const body = document.createElement("div");
   body.className = "body";
-  if (role === "ai" && !error) body.innerHTML = renderMarkdown(text);
+  if (role === "ai" && !error) setAiBody(body, text);
   else body.textContent = text;
   b.appendChild(body);
   row.appendChild(b);
   logEl.appendChild(row);
   return body;
 }
+// AIくんの返信を描画する。```report ブロックはダウンロード用のカードに置き換える
+function setAiBody(el, raw) {
+  const report = REPORT_RE.exec(raw)?.[1] ?? null;
+  const [before, after = ""] = stripControl(raw).split("%%REPORT%%");
+  el.innerHTML = renderMarkdown(before);
+  if (report !== null) {
+    el.appendChild(reportCard(report));
+    if (after.trim()) el.insertAdjacentHTML("beforeend", renderMarkdown(after));
+  }
+}
+function reportCard(report) {
+  const card = document.createElement("div");
+  card.className = "report-card";
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = "レポートの下書きができたよ";
+  const note = document.createElement("p");
+  note.textContent = "Word形式（.docx）で保存されます。Pages や Word で開いて、記入欄を自分の言葉で埋めよう。書き終えたらPDFで書き出して提出してね。";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "send";
+  btn.textContent = "レポートをダウンロード";
+  btn.addEventListener("click", () => downloadReport(report, btn));
+  card.append(title, note, btn);
+  return card;
+}
+
 function scrollDown() {
   logEl.scrollTop = logEl.scrollHeight;
 }
@@ -446,6 +545,7 @@ function showError(message) {
 async function send() {
   const text = $("input").value.trim();
   if (busy || (!text && !pendingImage)) return;
+  if (!state.student) { openProfile(); return; }
 
   const content = [];
   if (pendingImage) {
@@ -472,7 +572,7 @@ async function send() {
     const res = await fetch(WORKER_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ classCode: state.classCode, messages: state.apiMessages }),
+      body: JSON.stringify({ classCode: state.classCode, sessionId: state.sessionId, student: state.student, messages: state.apiMessages }),
     });
     if (!res.ok) {
       let msg = "AIくんに接続できませんでした。";
@@ -499,7 +599,7 @@ async function send() {
         const data = JSON.parse(dataLine);
         if (ev === "delta") {
           streamed += data.text;
-          aiBody.innerHTML = renderMarkdown(stripControl(streamed));
+          setAiBody(aiBody, streamed);
           scrollDown();
         } else if (ev === "done") {
           final = data;
@@ -513,11 +613,13 @@ async function send() {
     const fullText = final.content.filter((b) => b.type === "text").map((b) => b.text).join("");
     const steps = [...fullText.matchAll(STEP_RE)];
     if (steps.length) state.step = Math.max(state.step, Number(steps[steps.length - 1][1]));
-    const shown = stripControl(fullText);
-    aiBody.innerHTML = renderMarkdown(shown);
+    const kept = fullText.replace(STEP_RE, "").trimEnd();
+    setAiBody(aiBody, kept);
+    const report = REPORT_RE.exec(fullText)?.[1];
+    if (report) state.report = report;
 
     state.apiMessages.push({ role: "assistant", content: final.content });
-    state.view.push(userView, { role: "ai", text: shown });
+    state.view.push(userView, { role: "ai", text: kept });
     renderSteps();
     save();
   } catch (err) {
@@ -542,7 +644,8 @@ async function send() {
 
 // ===== 会話ログの保存（レポートの下書き用） =====
 function saveLog() {
-  const lines = ["# 誤差考察ラボ 会話ログ", "", `保存日時: ${new Date().toLocaleString("ja-JP")}`, ""];
+  const who = state.student ? `1年 ${state.student.cluster}クラスター ${state.student.number}番 ${state.student.name}` : "";
+  const lines = ["# 誤差考察ラボ 会話ログ", "", who, `保存日時: ${new Date().toLocaleString("ja-JP")}`, ""];
   lines.push("**AIくん:** " + GREETING, "");
   for (const v of state.view) {
     lines.push(`**${v.role === "ai" ? "AIくん" : "わたし"}:** ${v.image ? "［画像］ " : ""}${v.text}`, "");
@@ -588,7 +691,7 @@ $("reset").addEventListener("click", () => {
   resetArmed = null;
   btn.textContent = "最初からやり直す";
   btn.classList.remove("warn");
-  state = { apiMessages: [], view: [], step: 1, classCode: state.classCode };
+  state = { apiMessages: [], view: [], step: 1, classCode: state.classCode, student: state.student, sessionId: newId(), report: "" };
   save();
   renderAll();
 });
@@ -599,10 +702,184 @@ $("code-gate").addEventListener("submit", (e) => {
   $("code-gate").hidden = true;
 });
 
+// ===== 名前の入力 =====
+function newId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const x = [...b].map((n) => n.toString(16).padStart(2, "0")).join("");
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
+}
+function renderWho() {
+  const st = state.student;
+  $("who").textContent = st ? `${st.cluster}-${st.number} ${st.name}` : "名前を入力";
+}
+function openProfile() {
+  const st = state.student || {};
+  $("p-cluster").value = st.cluster || "";
+  $("p-number").value = st.number || "";
+  $("p-name").value = st.name || "";
+  $("p-code").value = state.classCode || "";
+  $("p-err").hidden = true;
+  $("profile-modal").hidden = false;
+  setTimeout(() => $(st.cluster ? "p-name" : "p-cluster").focus(), 50);
+}
+$("profile-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const cluster = $("p-cluster").value.trim().toUpperCase();
+  const number = Number($("p-number").value);
+  const name = $("p-name").value.trim().replace(/\s+/g, " ");
+  let err = "";
+  if (!/^[A-Z]{1,2}$/.test(cluster)) err = "クラスターはアルファベットで入力してください（例 B）。";
+  else if (!Number.isInteger(number) || number < 1 || number > 99) err = "番号は1〜99の数字で入力してください。";
+  else if (!name) err = "名前を入力してください。";
+  if (err) {
+    $("p-err").textContent = err;
+    $("p-err").hidden = false;
+    return;
+  }
+  state.student = { cluster, number, name };
+  const code = $("p-code").value.trim();
+  if (code) {
+    state.classCode = code;
+    $("class-code").value = code;
+  }
+  if (!state.sessionId) state.sessionId = newId();
+  save();
+  renderWho();
+  $("profile-modal").hidden = true;
+  $("input").focus();
+});
+$("who").addEventListener("click", openProfile);
+
+// ===== レポートを Word 形式で作る =====
+function plain(text) {
+  return text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1");
+}
+function buildReportDoc(md, student) {
+  const D = window.docx;
+  const font = { ascii: "Yu Gothic", eastAsia: "Yu Gothic", hAnsi: "Yu Gothic" };
+  const children = [];
+  const lines = md.replace(/\r/g, "").split("\n");
+  let titleDone = false;
+
+  const nameBlock = () => [
+    new D.Paragraph({
+      alignment: D.AlignmentType.RIGHT,
+      children: [new D.TextRun({ text: `1年 ${student.cluster}クラスター ${student.number}番　氏名 ${student.name}`, size: 22 })],
+    }),
+    new D.Paragraph({
+      alignment: D.AlignmentType.RIGHT,
+      spacing: { after: 240 },
+      children: [new D.TextRun({ text: "提出日　　　年　　月　　日", size: 22 })],
+    }),
+  ];
+  const TEXT_W = 11906 - 1134 * 2; // A4の幅から左右の余白を引いた本文の幅（twip）
+  const cellBorder = { style: D.BorderStyle.SINGLE, size: 6, color: "8A9A93" };
+  const borders = { top: cellBorder, bottom: cellBorder, left: cellBorder, right: cellBorder };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    let m;
+    if ((m = /^#\s+(.*)$/.exec(line))) {
+      children.push(new D.Paragraph({ heading: D.HeadingLevel.TITLE, alignment: D.AlignmentType.CENTER, children: [new D.TextRun({ text: plain(m[1]), size: 32, bold: true })] }));
+      if (!titleDone) { children.push(...nameBlock()); titleDone = true; }
+    } else if ((m = /^##\s+(.*)$/.exec(line))) {
+      children.push(new D.Paragraph({ heading: D.HeadingLevel.HEADING_1, spacing: { before: 240, after: 80 }, children: [new D.TextRun({ text: plain(m[1]), size: 26, bold: true })] }));
+    } else if ((m = /^###\s+(.*)$/.exec(line))) {
+      children.push(new D.Paragraph({ heading: D.HeadingLevel.HEADING_2, spacing: { before: 160, after: 60 }, children: [new D.TextRun({ text: plain(m[1]), size: 23, bold: true })] }));
+    } else if ((m = /^\[\[記入欄[:：]\s*(.*?)\]\]$/.exec(line))) {
+      // 自由記述の枠：ヒントを灰色で書き、下に空行を用意する
+      const inner = [new D.Paragraph({ children: [new D.TextRun({ text: "✎ " + plain(m[1]), color: "6B7A74", size: 19 })] })];
+      for (let k = 0; k < 5; k++) inner.push(new D.Paragraph({ text: "" }));
+      children.push(new D.Table({
+        width: { size: TEXT_W, type: D.WidthType.DXA },
+        columnWidths: [TEXT_W],
+        layout: D.TableLayoutType.FIXED,
+        rows: [new D.TableRow({ children: [new D.TableCell({ width: { size: TEXT_W, type: D.WidthType.DXA }, borders, margins: { top: 80, bottom: 80, left: 120, right: 120 }, children: inner })] })],
+      }));
+      children.push(new D.Paragraph({ text: "" }));
+    } else if (line.startsWith("|")) {
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith("|")) {
+        const cells = lines[i].trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => plain(c.trim()));
+        if (!cells.every((c) => /^:?-{2,}:?$/.test(c))) rows.push(cells);
+        i++;
+      }
+      i--;
+      const cols = Math.max(...rows.map((r) => r.length));
+      const colW = Math.floor(TEXT_W / cols);
+      children.push(new D.Table({
+        width: { size: colW * cols, type: D.WidthType.DXA },
+        columnWidths: Array(cols).fill(colW),
+        layout: D.TableLayoutType.FIXED,
+        rows: rows.map((r, ri) => new D.TableRow({
+          tableHeader: ri === 0,
+          children: Array.from({ length: cols }, (_, ci) => new D.TableCell({
+            width: { size: colW, type: D.WidthType.DXA },
+            borders,
+            margins: { top: 40, bottom: 40, left: 100, right: 100 },
+            shading: ri === 0 ? { type: D.ShadingType.CLEAR, fill: "E3ECE8", color: "auto" } : undefined,
+            children: [new D.Paragraph({ children: [new D.TextRun({ text: r[ci] || "", bold: ri === 0, size: 20 })] })],
+          })),
+        })),
+      }));
+      children.push(new D.Paragraph({ text: "" }));
+    } else if ((m = /^[-・]\s+(.*)$/.exec(line))) {
+      children.push(new D.Paragraph({ bullet: { level: 0 }, children: [new D.TextRun({ text: plain(m[1]) })] }));
+    } else {
+      children.push(new D.Paragraph({ spacing: { after: 80 }, children: [new D.TextRun({ text: plain(line) })] }));
+    }
+  }
+  if (!titleDone) children.unshift(...nameBlock());
+
+  return new D.Document({
+    creator: student.name,
+    title: "実験レポート",
+    styles: { default: { document: { run: { font, size: 21 } } } },
+    sections: [{
+      properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1134, bottom: 1134, left: 1134, right: 1134 } } },
+      children,
+    }],
+  });
+}
+async function downloadReport(md, btn) {
+  if (!state.student) { openProfile(); return; }
+  if (!window.docx) {
+    showError("レポートを作る部品を読み込めませんでした。ページを再読み込みしてから、もう一度押してください。");
+    return;
+  }
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "作成中…";
+  try {
+    const blob = await window.docx.Packer.toBlob(buildReportDoc(md, state.student));
+    const st = state.student;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `実験レポート_${st.cluster}${st.number}_${st.name}.docx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch {
+    showError("レポートを作れませんでした。もう一度押してください。");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
 load();
+if (!state.sessionId) state.sessionId = newId();
 $("class-code").value = state.classCode || "";
+renderWho();
 renderAll();
 updateSend();
+if (!state.student) openProfile();
 </script>
 </body>
 </html>
